@@ -1,10 +1,9 @@
-const MAX_RETRIES = 8;
-const MAX_BACKOFF_MS = 30000;
-const CONCURRENCY = 10;
+const MAX_RETRIES = 5;
+const CONCURRENCY = 5;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Exponential backoff with jitter so parallel requests don't retry in lockstep.
-const backoff = (attempt) => Math.min(MAX_BACKOFF_MS, 1000 * 2 ** attempt) * (0.5 + Math.random());
+// Exponential backoff: 2s, 4s, 8s, 16s, 32s.
+const backoff = (attempt) => 2000 * 2 ** attempt;
 const baseUrl = () => `https://app.loxo.co/api/${process.env.LOXO_SLUG}`;
 
 // Simple concurrency limiter shared by all Loxo requests.
@@ -36,8 +35,10 @@ async function rawRequest(path, { method = 'GET', body, headers = {} } = {}) {
       continue;
     }
     if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
-      const retryAfter = Number(res.headers.get('retry-after'));
-      await sleep(retryAfter > 0 ? retryAfter * 1000 : backoff(attempt));
+      // Retry-After may be seconds or an HTTP date.
+      const header = res.headers.get('retry-after');
+      const retryAfterMs = header ? Number(header) * 1000 || Date.parse(header) - Date.now() : 0;
+      await sleep(retryAfterMs > 0 ? retryAfterMs : backoff(attempt));
       continue;
     }
     if (!res.ok) throw new Error(`${method} ${path.split('?')[0]} -> HTTP ${res.status}`);
